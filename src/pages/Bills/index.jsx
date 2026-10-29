@@ -357,15 +357,22 @@ export default function Bills() {
       total.appendChild(perRow)
       wrap.appendChild(total)
 
-      wrap.appendChild(h('div', 'margin-top:28px;text-align:right;font-size:12px;color:#9ca3af', `${year}년 ${month}월 생성`))
+      const generatedAt = new Date()
+      const generatedLabel = format(generatedAt, 'yyyy-MM-dd HH:mm:ss')
+      wrap.appendChild(h(
+        'div',
+        'margin-top:28px;text-align:right;font-size:12px;color:#9ca3af',
+        `생성 ${generatedLabel} · ${totalR}명 · 합계 ${fmtNum(totalA)}원`
+      ))
 
       document.body.appendChild(wrap)
       const canvas = await html2canvas(wrap, { scale: 2, backgroundColor: '#ffffff', useCORS: true, logging: false })
       document.body.removeChild(wrap)
 
       const mStr = String(month).padStart(2, '0')
+      const timestamp = format(generatedAt, 'yyyyMMdd-HHmmss')
       const a = document.createElement('a')
-      a.download = `${year}-${mStr}_${typeLabel}_분담내역.png`
+      a.download = `${year}-${mStr}_${typeLabel}_분담내역_${timestamp}.png`
       a.href = canvas.toDataURL('image/png')
       a.click()
     } catch (e) {
