@@ -6,6 +6,7 @@ import Settlement from './Settlement'
 import NotificationSettings from './NotificationSettings'
 import NotificationHistory from './NotificationHistory'
 import { fmt, fmtNum } from '../../lib/fmt'
+import html2canvas from 'html2canvas'
 
 // B101, B102 → 앞, 이후 101~401옥탑 순
 function unitSortKey(unitNo) {
@@ -332,7 +333,6 @@ export default function Bills() {
       wrap.appendChild(h('div', 'margin-top:28px;text-align:right;font-size:12px;color:#9ca3af', `${year}년 ${month}월 생성`))
 
       document.body.appendChild(wrap)
-      const { default: html2canvas } = await import('html2canvas')
       const canvas = await html2canvas(wrap, { scale: 2, backgroundColor: '#ffffff', useCORS: true, logging: false })
       document.body.removeChild(wrap)
 
