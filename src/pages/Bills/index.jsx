@@ -16,6 +16,26 @@ function unitSortKey(unitNo) {
 }
 
 // 직전 사용량 대비 변화 계산
+function waterReferencePerPerson(bill, rows, totalDiscount = 0) {
+  if (!bill?.period_start || !bill?.period_end) return null
+  const toUtcDay = value => {
+    const [year, month, day] = value.split('-').map(Number)
+    return Date.UTC(year, month - 1, day) / 86400000
+  }
+  const periodStart = toUtcDay(bill.period_start)
+  const periodEnd = toUtcDay(bill.period_end)
+  const periodDays = periodEnd - periodStart + 1
+  const totalWeight = rows.reduce((sum, row) => {
+    if (!row.move_in_date || !row.residents) return sum
+    const start = Math.max(periodStart, toUtcDay(row.move_in_date))
+    const end = Math.min(periodEnd, row.move_out_date ? toUtcDay(row.move_out_date) : periodEnd)
+    return end >= start ? sum + row.residents * (end - start + 1) : sum
+  }, 0)
+  if (periodDays <= 0 || totalWeight <= 0) return null
+  const preDiscountTotal = Number(bill.total_amount) + totalDiscount
+  return Math.round(preDiscountTotal * periodDays / totalWeight)
+}
+
 function calcUsageDiff(current, prev, unit) {
   if (current == null || prev == null || Number(prev) === 0) return null
   const cur = Number(current)
@@ -134,13 +154,15 @@ export default function Bills() {
     setBillRows([])
     const { data } = await supabase
       .from('charge_details')
-      .select('amount, monthly_charges(tenant_id, tenants(name, residents, units(unit_no)))')
+      .select('amount, monthly_charges(tenant_id, tenants(name, residents, move_in_date, move_out_date, units(unit_no)))')
       .eq('source_bill_id', billId)
     const rows = (data || []).map(d => ({
       tenantId: d.monthly_charges?.tenant_id || null,
       unit_no: d.monthly_charges?.tenants?.units?.unit_no || '?',
       name: d.monthly_charges?.tenants?.name || '?',
       residents: d.monthly_charges?.tenants?.residents || 0,
+      move_in_date: d.monthly_charges?.tenants?.move_in_date || null,
+      move_out_date: d.monthly_charges?.tenants?.move_out_date || null,
       amount: Number(d.amount),
     }))
     rows.sort((a, b) => (unitSortKey(a.unit_no) < unitSortKey(b.unit_no) ? -1 : 1))
@@ -168,6 +190,7 @@ export default function Bills() {
     const totalA = billRows.reduce((s, r) => s + r.amount, 0)
     const discounts = billDiscounts[bill.id] || []
     const totalDiscount = discounts.reduce((s, d) => s + Number(d.amount), 0)
+    const referencePerPerson = waterReferencePerPerson(bill, billRows, totalDiscount)
 
     const lines = [`[${year}년 ${month}월 ${typeLabel}]`]
     if (bill.usage_amount != null) {
@@ -191,7 +214,10 @@ export default function Bills() {
       lines.push(`세대 전용 감면: -${fmtNum(totalDiscount)}원`)
     }
     lines.push(`분담금 합계: ${fmtNum(totalA)}원`)
-    if (bill.expense_type_code === 'WATER') lines.push('배분기준: 거주인원 × 거주일수')
+    if (bill.expense_type_code === 'WATER') {
+      lines.push('배분기준: 거주인원 × 거주일수')
+      if (referencePerPerson != null) lines.push(`전 기간 거주 1인 기준: 약 ${fmtNum(referencePerPerson)}원 (원 단위 반올림 ±1원)`)
+    }
     else if (totalR > 0) lines.push(`1인당: ${fmtNum(Math.round(totalA / totalR))}원`)
 
     navigator.clipboard.writeText(lines.join('\n')).then(() => {
@@ -212,6 +238,7 @@ export default function Bills() {
       const totalA = billRows.reduce((s, r) => s + r.amount, 0)
       const discounts = billDiscounts[bill.id] || []
       const totalDiscount = discounts.reduce((s, d) => s + Number(d.amount), 0)
+      const referencePerPerson = waterReferencePerPerson(bill, billRows, totalDiscount)
 
       // React 렌더 사이클 없이 DOM 직접 생성 — 타이밍 문제 없음
       const wrap = document.createElement('div')
@@ -309,8 +336,8 @@ export default function Bills() {
       sumRow.style.cssText += ';margin-bottom:10px'
       const perRow = bill.expense_type_code === 'WATER'
         ? flex([
-            ['배분기준', 'flex:1;font-size:15px;color:#6b7280'],
-            ['거주인원 × 거주일수', 'font-size:15px;color:#6b7280'],
+            ['전 기간 거주 1인 기준', 'flex:1;font-size:15px;color:#6b7280'],
+            [referencePerPerson == null ? '-' : `약 ${fmtNum(referencePerPerson)}원 (±1원)`, 'font-size:15px;color:#6b7280'],
           ])
         : flex([
             ['1인당 단가', 'flex:1;font-size:15px;color:#6b7280'],
@@ -909,14 +936,26 @@ export default function Bills() {
                               </div>
                               <div className="flex justify-between text-xs text-gray-500">
                                 {b.expense_type_code === 'WATER' ? (
-                                  <><span>배분기준</span><span>거주인원 × 거주일수</span></>
+                                  <>
+                                    <span>전 기간 거주 1인 기준</span>
+                                    <span>{(() => {
+                                      const discounts = billDiscounts[b.id] || []
+                                      const totalDiscount = discounts.reduce((s, d) => s + Number(d.amount), 0)
+                                      const reference = waterReferencePerPerson(b, billRows, totalDiscount)
+                                      return reference == null ? '-' : `약 ${fmtNum(reference)}원 (±1원)`
+                                    })()}</span>
+                                  </>
                                 ) : (
                                   <><span>1인당 단가</span><span>{fmtNum(totalR > 0 ? Math.round(totalA / totalR) : 0)}원</span></>
                                 )}
                               </div>
-                              {diff !== 0 && (
-                                <div className="flex justify-between text-xs text-orange-500">
-                                  <span>고지서 총액 대비 차액</span>
+                              {diff === 0 ? (
+                                <div className="flex justify-between text-xs text-green-600 font-medium">
+                                  <span>고지서 총액과 일치</span><span>차액 0원</span>
+                                </div>
+                              ) : (
+                                <div className="flex justify-between text-xs text-orange-600 font-medium">
+                                  <span>재분배 필요 · 고지서 총액 대비 차액</span>
                                   <span>{diff > 0 ? '+' : ''}{fmtNum(diff)}원</span>
                                 </div>
                               )}
