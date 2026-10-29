@@ -165,6 +165,8 @@ export default function Bills() {
     const month = bDate.getMonth() + 1
     const totalR = billRows.reduce((s, r) => s + r.residents, 0)
     const totalA = billRows.reduce((s, r) => s + r.amount, 0)
+    const discounts = billDiscounts[bill.id] || []
+    const totalDiscount = discounts.reduce((s, d) => s + Number(d.amount), 0)
 
     const lines = [`[${year}년 ${month}월 ${typeLabel}]`]
     if (bill.usage_amount != null) {
@@ -174,8 +176,20 @@ export default function Bills() {
     lines.push(`사용요금: ${fmtNum(bill.total_amount)}원`)
     lines.push(`총인원: ${totalR}명`)
     lines.push('')
-    for (const r of billRows) lines.push(`${r.unit_no} : ${r.residents}인 : ${fmtNum(r.amount)}원`)
-    lines.push('', `분담금 합계: ${fmtNum(totalA)}원`)
+    for (const r of billRows) {
+      const discount = discounts.find(d => d.tenant_id === r.tenantId)
+      if (discount) {
+        const reason = discount.reason ? ` (${discount.reason})` : ''
+        lines.push(`${r.unit_no} ${r.name} : 감면 전 ${fmtNum(r.amount + Number(discount.amount))}원 - 감면 ${fmtNum(discount.amount)}원${reason} = ${fmtNum(r.amount)}원`)
+      } else {
+        lines.push(`${r.unit_no} ${r.name} : ${r.residents}인 : ${fmtNum(r.amount)}원`)
+      }
+    }
+    if (totalDiscount > 0) {
+      lines.push('', `감면 전 배분액: ${fmtNum(Number(bill.total_amount) + totalDiscount)}원`)
+      lines.push(`세대 전용 감면: -${fmtNum(totalDiscount)}원`)
+    }
+    lines.push(`분담금 합계: ${fmtNum(totalA)}원`)
     if (bill.expense_type_code === 'WATER') lines.push('배분기준: 거주인원 × 거주일수')
     else if (totalR > 0) lines.push(`1인당: ${fmtNum(Math.round(totalA / totalR))}원`)
 
@@ -195,6 +209,8 @@ export default function Bills() {
       const month = bDate.getMonth() + 1
       const totalR = billRows.reduce((s, r) => s + r.residents, 0)
       const totalA = billRows.reduce((s, r) => s + r.amount, 0)
+      const discounts = billDiscounts[bill.id] || []
+      const totalDiscount = discounts.reduce((s, d) => s + Number(d.amount), 0)
 
       // React 렌더 사이클 없이 DOM 직접 생성 — 타이밍 문제 없음
       const wrap = document.createElement('div')
@@ -244,6 +260,10 @@ export default function Bills() {
           infoBlock.appendChild(infoRow('사용기간', `${bill.period_start} ~ ${bill.period_end}`))
         infoBlock.appendChild(infoRow('사용량', `${bill.usage_amount}${bill.usage_unit || '㎥'}`))
       }
+      if (totalDiscount > 0) {
+        infoBlock.appendChild(infoRow('감면 전 배분액', `${fmtNum(Number(bill.total_amount) + totalDiscount)}원`))
+        infoBlock.appendChild(infoRow('세대 전용 감면', `-${fmtNum(totalDiscount)}원`))
+      }
       infoBlock.appendChild(infoRow('사용요금', `${fmtNum(bill.total_amount)}원`))
       infoBlock.appendChild(infoRow('총인원', `${totalR}명`))
       wrap.appendChild(infoBlock)
@@ -259,14 +279,24 @@ export default function Bills() {
       wrap.appendChild(headerRow)
 
       for (const r of billRows) {
+        const discount = discounts.find(d => d.tenant_id === r.tenantId)
         const row = flex([
           [r.unit_no,           `flex:${COL[0]};font-size:22px;font-weight:700;color:#111827`],
           [r.name,              `flex:${COL[1]};font-size:20px;color:#1f2937`],
           [`${r.residents}인`,  `flex:${COL[2]};font-size:18px;color:#4b5563;text-align:center`],
           [`${fmtNum(r.amount)}원`, `flex:${COL[3]};font-size:22px;font-weight:700;color:#111827;text-align:right`],
         ])
-        row.style.cssText += ';padding:13px 0;border-bottom:1px solid #f3f4f6'
+        row.style.cssText += discount ? ';padding:13px 0 4px' : ';padding:13px 0;border-bottom:1px solid #f3f4f6'
         wrap.appendChild(row)
+        if (discount) {
+          const reason = discount.reason ? ` · ${discount.reason}` : ''
+          const detail = h(
+            'div',
+            'padding:0 0 11px 90px;border-bottom:1px solid #f3f4f6;font-size:14px;color:#7e22ce;text-align:right',
+            `감면 전 ${fmtNum(r.amount + Number(discount.amount))}원 − 감면 ${fmtNum(discount.amount)}원${reason} = 최종 ${fmtNum(r.amount)}원`
+          )
+          wrap.appendChild(detail)
+        }
       }
 
       const total = document.createElement('div')
@@ -285,6 +315,16 @@ export default function Bills() {
             ['1인당 단가', 'flex:1;font-size:15px;color:#6b7280'],
             [`${fmtNum(totalR > 0 ? Math.round(totalA / totalR) : 0)}원`, 'font-size:15px;color:#6b7280'],
           ])
+      if (totalDiscount > 0) {
+        total.appendChild(flex([
+          ['감면 전 배분액', 'flex:1;font-size:15px;color:#6b7280'],
+          [`${fmtNum(Number(bill.total_amount) + totalDiscount)}원`, 'font-size:15px;color:#6b7280'],
+        ]))
+        total.appendChild(flex([
+          ['세대 전용 감면', 'flex:1;font-size:15px;color:#7e22ce'],
+          [`-${fmtNum(totalDiscount)}원`, 'font-size:15px;color:#7e22ce;font-weight:700'],
+        ]))
+      }
       total.appendChild(sumRow)
       total.appendChild(perRow)
       wrap.appendChild(total)
