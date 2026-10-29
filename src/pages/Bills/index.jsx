@@ -117,8 +117,7 @@ export default function Bills() {
     return bills
       .filter(b => b.expense_type_code === bill.expense_type_code && b.id !== bill.id && !b.cancelled_at && b.usage_amount != null)
       .filter(b => b.billed_month < bill.billed_month || (b.billed_month === bill.billed_month && b.created_at < bill.created_at))
-      .sort((a, b) => b.billed_month.localeCompare(a.billed_month) || b.created_at.localeCompare(a.created_at))
-      [0] || null
+      .sort((a, b) => b.billed_month.localeCompare(a.billed_month) || b.created_at.localeCompare(a.created_at))[0] || null
   }
 
   // 폼에서 현재 선택된 항목의 직전 고지서
@@ -126,8 +125,7 @@ export default function Bills() {
     return bills
       .filter(b => b.expense_type_code === form.expense_type_code && !b.cancelled_at && b.usage_amount != null)
       .filter(b => b.billed_month < form.billed_month)
-      .sort((a, b) => b.billed_month.localeCompare(a.billed_month))
-      [0] || null
+      .sort((a, b) => b.billed_month.localeCompare(a.billed_month))[0] || null
   }
 
   async function loadBillDetails(billId) {
@@ -167,7 +165,6 @@ export default function Bills() {
     const month = bDate.getMonth() + 1
     const totalR = billRows.reduce((s, r) => s + r.residents, 0)
     const totalA = billRows.reduce((s, r) => s + r.amount, 0)
-    const perP = totalR > 0 ? Math.round(totalA / totalR) : 0
 
     const lines = [`[${year}년 ${month}월 ${typeLabel}]`]
     if (bill.usage_amount != null) {
@@ -178,7 +175,9 @@ export default function Bills() {
     lines.push(`총인원: ${totalR}명`)
     lines.push('')
     for (const r of billRows) lines.push(`${r.unit_no} : ${r.residents}인 : ${fmtNum(r.amount)}원`)
-    lines.push('', `분담금 합계: ${fmtNum(totalA)}원`, `1인당: ${fmtNum(perP)}원`)
+    lines.push('', `분담금 합계: ${fmtNum(totalA)}원`)
+    if (bill.expense_type_code === 'WATER') lines.push('배분기준: 거주인원 × 거주일수')
+    else if (totalR > 0) lines.push(`1인당: ${fmtNum(Math.round(totalA / totalR))}원`)
 
     navigator.clipboard.writeText(lines.join('\n')).then(() => {
       setCopyFeedback(bill.id)
@@ -196,7 +195,6 @@ export default function Bills() {
       const month = bDate.getMonth() + 1
       const totalR = billRows.reduce((s, r) => s + r.residents, 0)
       const totalA = billRows.reduce((s, r) => s + r.amount, 0)
-      const perP = totalR > 0 ? Math.round(totalA / totalR) : 0
 
       // React 렌더 사이클 없이 DOM 직접 생성 — 타이밍 문제 없음
       const wrap = document.createElement('div')
@@ -278,10 +276,15 @@ export default function Bills() {
         [`${fmtNum(totalA)}원`, 'font-size:22px;font-weight:800;color:#111827'],
       ])
       sumRow.style.cssText += ';margin-bottom:10px'
-      const perRow = flex([
-        ['1인당 단가', 'flex:1;font-size:15px;color:#6b7280'],
-        [`${fmtNum(perP)}원`, 'font-size:15px;color:#6b7280'],
-      ])
+      const perRow = bill.expense_type_code === 'WATER'
+        ? flex([
+            ['배분기준', 'flex:1;font-size:15px;color:#6b7280'],
+            ['거주인원 × 거주일수', 'font-size:15px;color:#6b7280'],
+          ])
+        : flex([
+            ['1인당 단가', 'flex:1;font-size:15px;color:#6b7280'],
+            [`${fmtNum(totalR > 0 ? Math.round(totalA / totalR) : 0)}원`, 'font-size:15px;color:#6b7280'],
+          ])
       total.appendChild(sumRow)
       total.appendChild(perRow)
       wrap.appendChild(total)
@@ -855,7 +858,6 @@ export default function Bills() {
                         {(() => {
                           const totalR = billRows.reduce((s, r) => s + r.residents, 0)
                           const totalA = billRows.reduce((s, r) => s + r.amount, 0)
-                          const perP = totalR > 0 ? Math.round(totalA / totalR) : 0
                           const diff = Number(b.total_amount) - totalA
                           return (
                             <div className="mt-2 pt-2 border-t border-gray-200 space-y-1">
@@ -866,7 +868,11 @@ export default function Bills() {
                                 <span>세대수</span><span>{billRows.length}개 호실</span>
                               </div>
                               <div className="flex justify-between text-xs text-gray-500">
-                                <span>1인당 단가</span><span>{fmtNum(perP)}원</span>
+                                {b.expense_type_code === 'WATER' ? (
+                                  <><span>배분기준</span><span>거주인원 × 거주일수</span></>
+                                ) : (
+                                  <><span>1인당 단가</span><span>{fmtNum(totalR > 0 ? Math.round(totalA / totalR) : 0)}원</span></>
+                                )}
                               </div>
                               {diff !== 0 && (
                                 <div className="flex justify-between text-xs text-orange-500">

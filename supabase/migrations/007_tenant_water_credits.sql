@@ -140,6 +140,9 @@ DECLARE
   v_per_person        BIGINT;
   v_remainder         BIGINT;
   v_total_weight      NUMERIC;
+  v_total_discount    NUMERIC := 0;
+  v_distribution_total NUMERIC;
+  v_charged_total     NUMERIC;
   v_credit_results    JSONB := '[]'::jsonb;
   rec                 RECORD;
   v_balance           NUMERIC;
@@ -161,6 +164,15 @@ BEGIN
   IF v_bill.cancelled_at IS NOT NULL THEN
     RETURN jsonb_build_object('success', false, 'error', 'BILL_CANCELLED');
   END IF;
+
+  -- 고지서 total_amount는 세대 전용 감면이 이미 반영된 실제 납부액이다.
+  -- 감면액을 다시 더한 금액을 배분한 뒤 해당 세대에서 감면해야 최종 합계가 고지액과 일치한다.
+  SELECT COALESCE(SUM(amount), 0)
+  INTO v_total_discount
+  FROM public.utility_bill_discounts
+  WHERE bill_id = p_bill_id;
+
+  v_distribution_total := v_bill.total_amount + v_total_discount;
 
   IF v_bill.expense_type_code = 'WATER' THEN
     ------------------------------------------------------------
@@ -226,9 +238,9 @@ BEGIN
     weighted AS (
       SELECT
         tenant_id,
-        FLOOR(v_bill.total_amount::numeric * weight / v_total_weight) AS floor_amt,
-        (v_bill.total_amount::numeric * weight / v_total_weight)
-          - FLOOR(v_bill.total_amount::numeric * weight / v_total_weight) AS frac
+        FLOOR(v_distribution_total * weight / v_total_weight) AS floor_amt,
+        (v_distribution_total * weight / v_total_weight)
+          - FLOOR(v_distribution_total * weight / v_total_weight) AS frac
       FROM overlap
     ),
     ranked AS (
@@ -241,7 +253,7 @@ BEGIN
     final AS (
       SELECT
         tenant_id,
-        (floor_amt + CASE WHEN rnk <= (v_bill.total_amount - total_floor) THEN 1 ELSE 0 END)::numeric(12,0) AS amount
+        (floor_amt + CASE WHEN rnk <= (v_distribution_total - total_floor) THEN 1 ELSE 0 END)::numeric(12,0) AS amount
       FROM ranked
     )
     SELECT
@@ -252,6 +264,13 @@ BEGIN
     FROM final f
     JOIN public.monthly_charges mc ON mc.tenant_id = f.tenant_id AND mc.billing_month = v_bill.billed_month
     LEFT JOIN public.utility_bill_discounts bd ON bd.bill_id = p_bill_id AND bd.tenant_id = f.tenant_id;
+
+    SELECT COALESCE(SUM(amount), 0) INTO v_charged_total
+    FROM public.charge_details WHERE source_bill_id = p_bill_id;
+    IF v_charged_total <> v_bill.total_amount THEN
+      RAISE EXCEPTION 'DISTRIBUTION_TOTAL_MISMATCH: expected %, got %',
+        v_bill.total_amount, v_charged_total;
+    END IF;
 
     -- 자동 충당: 방금 만든 각 WATER charge_details 행에 대해 (예약 있으면 예약분, 없으면 가용잔액)
     FOR rec IN
@@ -348,8 +367,8 @@ BEGIN
       RETURN jsonb_build_object('success', false, 'error', 'NO_RESIDENTS');
     END IF;
 
-    v_per_person := FLOOR(v_bill.total_amount / v_total_res);
-    v_remainder  := v_bill.total_amount - v_per_person * v_total_res;
+    v_per_person := FLOOR(v_distribution_total / v_total_res);
+    v_remainder  := v_distribution_total - v_per_person * v_total_res;
 
     DELETE FROM public.charge_details WHERE source_bill_id = p_bill_id;
 
@@ -369,6 +388,13 @@ BEGIN
     LEFT JOIN public.utility_bill_discounts bd ON bd.bill_id = p_bill_id AND bd.tenant_id = t.id
     WHERE mc.billing_month = v_bill.billed_month
       AND COALESCE(t.residents, 0) > 0;
+
+    SELECT COALESCE(SUM(amount), 0) INTO v_charged_total
+    FROM public.charge_details WHERE source_bill_id = p_bill_id;
+    IF v_charged_total <> v_bill.total_amount THEN
+      RAISE EXCEPTION 'DISTRIBUTION_TOTAL_MISMATCH: expected %, got %',
+        v_bill.total_amount, v_charged_total;
+    END IF;
 
     UPDATE public.utility_bills SET distributed_at = now() WHERE id = p_bill_id;
     RETURN jsonb_build_object('success', true);
